@@ -4,8 +4,6 @@ import math
 import time
 import numpy as np
 import csv
-
-import krpc.services
 import krpc.services.spacecenter
 from telemetry import Telemetry
 from helper import Helper
@@ -14,15 +12,21 @@ from dataset import Dataset
 #from neural_landing import NeuralLanding
 from flaptuning import FlapTuningV2
 from pidcontroller import PIDController
+from node_executor import execute_next_node
+from helper import Helper
+#from rendezvous import Rendezvous
 
 class FlightPlan:
-    def __init__(self,conn: krpc.Client) -> None:
+    def __init__(self,conn: krpc.Client, vessel: krpc.services.spacecenter.Vessel = None ) -> None:
         logging.basicConfig(level=logging.INFO)
         self.conn = conn
         self.flightId = time.time()
-        self.vessel = self.conn.space_center.active_vessel
+        if vessel is None:
+            self.vessel = self.conn.space_center.active_vessel
+        else:
+            self.vessel = vessel
         self.flight = self.vessel.flight()
-        self.telemetry = Telemetry(self.conn)
+        self.telemetry = Telemetry(self.conn,self.vessel)
         self.altitude = self.telemetry.streamAltitude()
         self.apoapsis = self.telemetry.streamApoapsis()
         self.fuel = self.telemetry.streamFuel(self.vessel.control.current_stage - 1)
@@ -64,6 +68,9 @@ class FlightPlan:
     def setNeuralLanding(self):
         self.neuralLand = True
  #       self.neuralLanding = NeuralLanding("landing.v3.model")
+
+    def control(self):
+        self.conn.space_center.active_vessel = self.vessel
 
     def setSAS(self,mode = None):
         self.vessel.auto_pilot.disengage()
@@ -123,27 +130,30 @@ class FlightPlan:
         orbitalVelocity = self.calculateVelocityForOrbit(orbitalAltitude)
         logging.info('calculate orbital velocity to reach ' + str(orbitalVelocity) + ' m/s')
         self.vessel.control.sas = False
-        self.vessel.control.rcs = False
+        #self.vessel.control.rcs = True
         self.vessel.control.throttle = 1.0
 
-        logging.info("3")
-        time.sleep(1)
-        logging.info("2")
-        time.sleep(1)
-        logging.info("1")
-        time.sleep(1)
+        #logging.info("3")
+        #time.sleep(1)
+        #logging.info("2")
+        #time.sleep(1)
+        #logging.info("1")
+        #time.sleep(1)
         logging.info("lift off")
         
-        self.separateStage()
+        startTime = self.ut()
+        
         self.vessel.auto_pilot.engage()
         self.vessel.auto_pilot.target_pitch_and_heading(90, 90)
         turnAngle = 0
-        
+        self.separateStage()
         #apoapsis = self.apoapsis()
         #hSpeed = self.horizontalSpeed()
         while True:
             if self.fuel() < 10:
+                self.vessel.control.rcs = False
                 self.separateStage()
+            
             altitude = self.altitude()
 
 
@@ -219,19 +229,33 @@ class FlightPlan:
         logging.info('Fine tuning')
         self.vessel.control.throttle = 0.01
         remainingBurn = self.conn.add_stream(node.remaining_burn_vector, node.reference_frame)
+        deltaBurn =Derivative(remainingBurn,0.001)
         self.vessel.control.throttle = 0.2
-        while remainingBurn()[1] > 0.5:
+        while remainingBurn()[1] > 0.1 and deltaBurn.getDelta(1)< 0:
             #logging.info(remainingBurn()[1])
             pass
         self.vessel.control.throttle = 0.0
         node.remove()
-
-        logging.info('Launch complete')
+        endTime = self.ut()
+        longitude = self.position['long']()
+        duration = endTime - startTime
+        logging.info('Orbit achieved in ' + str(duration) + ' s with longitude ' + str(longitude))
+        self.openDockingPort()
+        self.deploySolarPanels()
 
         return self.fuel()                
     
 
+    def deploySolarPanels(self, state = True):
+        for panel in self.vessel.parts.solar_panels:
+            panel.deployed = state
+
+    def openDockingPort(self, state = True):
+        self.vessel.parts.docking_ports[0].shielded = not state
+
     def reentry(self,file):
+        self.deploySolarPanels(False)
+        self.openDockingPort(False)
         self.vessel.auto_pilot.engage()
         self.vessel.auto_pilot.reference_frame = self.vessel.surface_velocity_reference_frame
         #self.vessel.auto_pilot.reference_frame = self.vessel.surface_reference_frame
@@ -277,7 +301,7 @@ class FlightPlan:
                     time.sleep(0.1)
 
     def landAtKSC(self):
-        startAt = -129.3
+        startAt = -129.4
         distancePerDegree = (self.vessel.orbit.body.equatorial_radius + self.altitude()) * math.pi * 2 / 360
         initialLongitude = self.telemetry.streamLongitude()()
 
@@ -294,13 +318,18 @@ class FlightPlan:
 
     def desorbit(self,burnDuration=5):
         self.vessel.control.throttle = 0
+        self.conn.space_center.clear_target()
+        self.openDockingPort(False)
+        self.activateRCS(False)
+        self.deploySolarPanels(False)
+        self.vessel.control.sas = False
         self.vessel.auto_pilot.engage()
         self.vessel.control.rcs = True
         self.vessel.auto_pilot.reference_frame = self.vessel.surface_velocity_reference_frame
         self.vessel.auto_pilot.target_direction = (0, -1, 0)
         
         self.vessel.auto_pilot.wait()
-        
+        time.sleep(5)
         position = {'lat':self.telemetry.streamLatitude(),'long':self.telemetry.streamLongitude()}
         logging.info('lat: ' + str(position['lat']()) + ' long: ' + str(position['long']()))
         self.vessel.control.throttle = 1
@@ -493,6 +522,11 @@ class FlightPlan:
             logging.info("deploy legs")
             leg.deployed = True
 
+
+    def activateRCS(self,active = True) -> None:
+        for rcs in self.vessel.parts.rcs:
+            if rcs.part.name == "RCSBlock.v2":
+                rcs.enabled = active
        
     def distanceToPad(self) -> float:
         return self.distanceToPoint(self.padCoordinates['lat'],self.padCoordinates['long'])
@@ -639,3 +673,27 @@ class FlightPlan:
     def touchDown(self):
         logging.debug("touchdown")
         self.vessel.control.rcs = False
+    
+
+    #def rdv(self,target):
+    #    rdv = Rendezvous(self,target)
+    #    rdv.execute()
+    
+    def transferErgol(self, tanker, target_ship, amount):
+        # Ensure both vessels are docked
+        if not tanker.docking_ports[0].has_docked_part or not target_ship.docking_ports[0].has_docked_part:
+            logging.error("Both vessels must be docked to transfer ergol.")
+            return
+        self.conn.space_center.target_docking_port
+        # Get the resource to transfer
+        resource = 'LiquidFuel'
+
+        # Get the amount of resource in the tanker
+        available_amount = tanker.resources.amount(resource)
+        if available_amount < amount:
+            logging.warning(f"Not enough {resource} in the tanker. Available: {available_amount}, Requested: {amount}")
+            amount = available_amount
+
+        # Transfer the resource
+        tanker.resources.transfer(target_ship.resources, resource, amount)
+        logging.info(f"Transferred {amount} units of {resource} from tanker to target ship.")

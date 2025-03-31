@@ -1,10 +1,14 @@
 import krpc
 import krpc.stream
+import krpc.services.spacecenter
 
 class Telemetry:
-    def __init__(self,conn: krpc.Client) -> None:
+    def __init__(self,conn: krpc.Client, vessel: krpc.services.spacecenter.Vessel = None) -> None:
         self.conn = conn
-        self.vessel = self.conn.space_center.active_vessel
+        if vessel is None:
+            self.vessel = self.conn.space_center.active_vessel
+        else:
+            self.vessel = vessel
 
     def streamAltitude(self) -> krpc.stream:
         return self.conn.add_stream(getattr, self.vessel.flight(), 'surface_altitude')
