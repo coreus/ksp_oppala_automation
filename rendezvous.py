@@ -3,7 +3,7 @@ import logging
 from helper import Helper
 from derivative import Derivative
 from flightplan import FlightPlan
-from krpc.services.spacecenter import DockingPortState
+
 
 class Rendezvous:
     def __init__(self,flight:FlightPlan,target:FlightPlan):
@@ -11,7 +11,9 @@ class Rendezvous:
         self.target = target
         
     def execute(self):
+        logging.info("Executing rendezvous")
         self.flight.vessel.control.rcs = True
+        logging.info("Closest distance: %s", self.distanceForecast())
         while not (self.distanceForecast() < 50 and self.speed() < 1):
             while self.speed() > 1:
                 self.flight.conn.space_center.warp_to(self.flight.conn.space_center.active_vessel.orbit.time_of_closest_approach(self.target.vessel.orbit))
@@ -25,21 +27,17 @@ class Rendezvous:
             self.follow(maxSpeed)
         
         time.sleep(2)
-        
+        self.flight.deploySolarPanels()
         self.dock()
-        time.sleep(10)
-        self.transfer()
-        time.sleep(1)
-        self.undock()
         
-
+    
     def identifyTanks(self):
         self.TankerLox = self.flight.conn.space_center.active_vessel.resources.with_resource("Oxidizer")[0].amount
         self.TankerPropelant = self.flight.conn.space_center.active_vessel.resources.with_resource("LiquidFuel")[0].amount
         self.TargetLox = self.target.vessel.resources.with_resource("Oxidizer")[0].amount
         self.TargetPropelant = self.target.vessel.resources.with_resource("LiquidFuel")[0].amount
 
-    def transfer(self, left = 400):
+    def transfer(self, leftOxidizer = 500, leftFuel=410):
         count = 0
         if self.TankerLox != self.flight.conn.space_center.active_vessel.resources.with_resource("Oxidizer")[0].amount:
             count = 1
@@ -54,8 +52,11 @@ class Rendezvous:
         self.TankerPropelant = self.flight.conn.space_center.active_vessel.resources.with_resource("LiquidFuel")[(0 + count) % 2]
         self.TargetPropelant = self.flight.conn.space_center.active_vessel.resources.with_resource("LiquidFuel")[(1 + count) % 2]
 
-        self.flight.conn.space_center.ResourceTransfer.start(self.TankerLox.part,self.TargetLox.part,"Oxidizer",self.TankerLox.amount-left)
-        self.flight.conn.space_center.ResourceTransfer.start(self.TankerPropelant.part,self.TargetPropelant.part,"LiquidFuel",self.TankerPropelant.amount-left)
+        logging.info(f"Transfering fuel")
+        #propelantLeft = round(left * self.TargetPropelant.amount / self.TargetLox.amount)
+        self.flight.conn.space_center.ResourceTransfer.start(self.TankerLox.part,self.TargetLox.part,"Oxidizer",self.TankerLox.amount-leftOxidizer)
+        self.flight.conn.space_center.ResourceTransfer.start(self.TankerPropelant.part,self.TargetPropelant.part,"LiquidFuel",self.TankerPropelant.amount-leftFuel)
+        
 
     def facing(self):
 
@@ -160,7 +161,10 @@ class Rendezvous:
             time.sleep(0.1)
         self.flight.vessel.control.throttle = 0
         self.flight.setSAS(mode=self.flight.vessel.control.sas_mode.retrograde)
-        time.sleep(0.5)
-        self.flight.conn.space_center.warp_to(self.flight.conn.space_center.active_vessel.orbit.time_of_closest_approach(self.target.vessel.orbit))
+        #time.sleep(0.5)
+        if self.distanceForecast() < 10:
+            self.flight.conn.space_center.warp_to(self.flight.conn.space_center.active_vessel.orbit.time_of_closest_approach(self.target.vessel.orbit) - 10)
+        else:
+            self.flight.conn.space_center.warp_to(self.flight.conn.space_center.active_vessel.orbit.time_of_closest_approach(self.target.vessel.orbit))
         self.nullifyRelativeSpeed()
     
