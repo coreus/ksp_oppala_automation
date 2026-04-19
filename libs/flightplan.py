@@ -5,10 +5,11 @@ import time
 import numpy as np
 import csv
 import krpc.services.spacecenter
-from telemetry import Telemetry
-from derivative import Derivative
-from dataset import Dataset
-from flaptuning import FlapTuningV2
+from .telemetry import Telemetry
+from .derivative import Derivative
+from .dataset import Dataset
+from .flaptuning import FlapTuningV2
+from .powered_descent import shouldStartLanding
 
 
 #from rendezvous import Rendezvous
@@ -623,25 +624,40 @@ class FlightPlan:
         tuner.setTargetPosition(0)
         tuner.setThreshold(1)
         tuner.setReverse(True)
-        
-        baseMass = self.vessel.mass
-        y_acceleration = self.vessel.max_thrust * throttle / baseMass
-        
+
         while True:
             logging.debug('horizontal speed : ' + str(self.horizontalSpeed()) + ' vertical speed : '  + str(self.verticalSpeed()) + " tangage : " + str(flight.pitch) + " atmo density : " + str(flight.atmosphere_density))
             time.sleep(0.1)
             tuner.tune()
             logging.debug('front flap : ' + str(self.getFrontFlapAngle()) + ' back flap : '  + str(self.getBackFlapAngle()))
-            altitude = self.altitude() - 2.5 * self.speed()
-            squareSpeed = 2 * altitude * (y_acceleration - self.vessel.orbit.body.surface_gravity)
-            if squareSpeed < 0:
+
+            drag_vec = flight.drag
+            drag_force = drag_vec[0]
+            drag_acc = drag_force / self.vessel.mass
+            g = self.vessel.orbit.body.surface_gravity
+            logging.debug(
+                f"GFOLD drag | F_drag={drag_force:.0f} N  "
+                f"a_drag={drag_acc:.2f} m/s²  "
+                f"a_eff={max(0.0, g - drag_acc):.2f} m/s²"
+            )
+            gfold = shouldStartLanding(
+                h=self.altitude(),
+                vz=self.verticalSpeed(),
+                mass=self.vessel.mass,
+                T_max=self.vessel.max_thrust,
+                g=g,
+                drag_acc=drag_acc,
+            )
+            logging.debug(
+                f"GFOLD | alt={self.altitude():.0f}m "
+                f"h_bellyflop={gfold['h_bellyflop']:.0f}m "
+                f"h_ignite={gfold['h_ignite']:.0f}m "
+                f"margin={gfold['margin']:.2f}x "
+                f"t_burn={gfold['t_burn']}s"
+            )
+            if gfold['bellyflop_now'] or self.altitude() < minAltitude:
                 break
-            if (self.speed() > math.sqrt(squareSpeed) and altitude < 10000) or altitude < minAltitude:
-                break
-        
-        
-        logging.debug('start belly flop altitude : ' +  str(self.altitude()) +' horizontal speed : ' + str(self.horizontalSpeed()) + ' vertical speed : '  + str(self.verticalSpeed()))
-        
+
         self.bellyFlop()
         logging.debug('horizontal speed : ' + str(self.horizontalSpeed()) + ' vertical speed : '  + str(self.verticalSpeed()))
         self.reachSpeed(-20)

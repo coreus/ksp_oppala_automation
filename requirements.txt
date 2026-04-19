@@ -1,0 +1,4 @@
+krpc
+numpy
+pandas
+rich

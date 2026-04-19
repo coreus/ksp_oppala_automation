@@ -1,4 +1,4 @@
-from abstract_tuning import AbstractTuning
+from .abstract_tuning import AbstractTuning
 
 class FlapTuningV2(AbstractTuning):
     def __init__(self,getFrontFlapAngle,getBackFlapAngle,setFrontFlapAngle,setBackFlapAngle,getPitch) -> None:

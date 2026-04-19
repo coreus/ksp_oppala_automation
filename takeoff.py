@@ -1,15 +1,16 @@
 import logging, time, os, sys
 import math
-from flightplan import FlightPlan
-from rendezvous import Rendezvous
-from connect import Connect
+from libs.flightplan import FlightPlan
+from libs.rendezvous import Rendezvous
+from libs.connect import Connect
+from libs.logger import setup as setup_logging
 
 plan = sys.argv[1]
 vesselName = sys.argv[2]
 target = sys.argv[3]
 conn = Connect.start('Takeoff')
 
-logging.basicConfig(level=logging.DEBUG)
+setup_logging()
 
 
 timeToOrbit = 227.8
