@@ -45,7 +45,7 @@ if not alreadyFlying:
     time.sleep(2)
     if plan == "test":
         logging.info("test launch")
-        flight.testLaunch(6000)
+        flight.testLaunch(1500)
     if plan == "orbit":
         logging.info("launch to orbit")
         flight.launchToOrbit(targetAltitude,turnStartAltitude,turnEndAltitude)
@@ -173,11 +173,13 @@ if plan == "rendezvous":
 if plan == "test":
     flight.prepareLanding()
 if plan == "reentry":
-    flight.landAtKSCSequence()
-    flight.desorbit(4)
+    #flight.landAtKSCSequence()
+    #flight.desorbit(4)
     flight.reentry("reentry_plan.csv")
     flight.setFrontFlap(30)
     flight.setBackFlap(90)
+if plan == "landing":
+    flight.prepareLanding()
 logging.info("landing")
 flight.landing(700)
 flight.touchDown()

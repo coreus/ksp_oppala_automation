@@ -287,11 +287,12 @@ class FlightPlan:
                     tuner.setFrontState(True)
                     tuner.setBackState(False)
                 
-                #self.vessel.auto_pilot.target_pitch = float(angle)
-                self.vessel.auto_pilot.target_pitch_and_heading(float(angle),self.yawToPoint(self.padCoordinates["lat"],self.padCoordinates["long"]))
+                self.vessel.auto_pilot.target_pitch = float(angle)
+                #self.vessel.auto_pilot.target_pitch_and_heading(float(angle),self.yawToPoint(self.padCoordinates["lat"],self.padCoordinates["long"]))
                 
                 tuner.setTargetPosition(float(angle) + self.getProgradAngle())
                 #aligned = False
+                padLong = -74.55773266001711
                 while self.horizontalSpeed() > float(speed) or float(angle) + self.getProgradAngle()<5:
                     if tuner.reverse == False and flight.mach < 1.2:
                         tuner.setReverse(True)
@@ -299,6 +300,12 @@ class FlightPlan:
                     #tuning is useless without atmosphere
                     if flight.atmosphere_density > 0.001:
                         tuner.tune()
+                        estimatedLandingZone = self.estimateLandingZone()
+                        #if estimatedLandingZone['long'] > padLong and flight.atmosphere_density < 0.05:
+                        #    tuner.setTargetPosition(float(angle) + self.getProgradAngle() + 5)
+                        #else:
+                        #    tuner.setTargetPosition(float(angle) + self.getProgradAngle())
+                        logging.debug("target pitch : " + str(float(angle)) + " prograde : " + str(self.getProgradAngle()) + " target position : " + str(tuner.targetPosition))
                         if abs(tuner.targetPosition - float(angle) - self.getProgradAngle()) > 1:
                             tuner.setTargetPosition(float(angle) + self.getProgradAngle())
                     force =  math.sqrt(pow(flight.aerodynamic_force[0],2) + pow(flight.aerodynamic_force[1],2) + pow(flight.aerodynamic_force[2],2))
@@ -307,7 +314,7 @@ class FlightPlan:
 
     def landAtKSC(self):
         startAt = -129.4
-        startAt = -129.9
+        startAt = -129.8
         
         distancePerDegree = (self.vessel.orbit.body.equatorial_radius + self.altitude()) * math.pi * 2 / 360
         initialLongitude = self.telemetry.streamLongitude()()
@@ -362,6 +369,17 @@ class FlightPlan:
         while self.altitude() > 51000:
             time.sleep(0.5)
         
+    def estimateLandingZone(self):
+        target_radius = self.vessel.orbit.body.equatorial_radius
+        impact_true_anomaly = self.vessel.orbit.true_anomaly_at_radius(target_radius)
+
+        impact_ut = self.vessel.orbit.ut_at_true_anomaly(impact_true_anomaly)
+        impact_pos = self.vessel.orbit.position_at(impact_ut, self.vessel.orbit.body.reference_frame)
+        
+        impact_latitude = self.vessel.orbit.body.latitude_at_position(impact_pos, self.vessel.orbit.body.reference_frame)
+        impact_longitude = self.vessel.orbit.body.longitude_at_position(impact_pos, self.vessel.orbit.body.reference_frame)
+        logging.info('estimated landing zone - lat: ' + str(impact_latitude) + ' long: ' + str(impact_longitude))
+        return {'lat': impact_latitude, 'long': impact_longitude}
     
     def prelanding(self, angle, prograde):
         self.vessel.auto_pilot.engage()
@@ -477,6 +495,7 @@ class FlightPlan:
 
 
     def bellyFlop(self):
+        bellyflop_start = self.ut()
         self.vessel.control.throttle = 0.3
         self.vessel.control.rcs = True
         
@@ -488,6 +507,8 @@ class FlightPlan:
             time.sleep(0.01)
         self.setFrontFlap(20)
         
+        bellyflop_duration = self.ut() - bellyflop_start
+        logging.info("bellyflop duration : " + str(bellyflop_duration) + " s")
         self.vessel.control.throttle = 1
         
 
@@ -638,27 +659,33 @@ class FlightPlan:
             logging.debug(
                 f"GFOLD drag | F_drag={drag_force:.0f} N  "
                 f"a_drag={drag_acc:.2f} m/s²  "
-                f"a_eff={max(0.0, g - drag_acc):.2f} m/s²"
+                f"a_eff={max(0.0, g - drag_acc):.2f} m/s² "
+                f"v_z={self.verticalSpeed():.2f} m/s "
+                f"dyn_pressure={flight.dynamic_pressure:.2f} Pa"
             )
-            gfold = shouldStartLanding(
+            vz=self.verticalSpeed()
+            dyn_pressure=flight.dynamic_pressure
+            startLanding = shouldStartLanding(
                 h=self.altitude(),
-                vz=self.verticalSpeed(),
+                vz=vz,
                 mass=self.vessel.mass,
                 T_max=self.vessel.max_thrust,
                 g=g,
+                bellyflop_time=3 - 0.00314143 * vz - 0.00003825 * dyn_pressure,
                 drag_acc=drag_acc,
             )
             logging.debug(
                 f"GFOLD | alt={self.altitude():.0f}m "
-                f"h_bellyflop={gfold['h_bellyflop']:.0f}m "
-                f"h_ignite={gfold['h_ignite']:.0f}m "
-                f"margin={gfold['margin']:.2f}x "
-                f"t_burn={gfold['t_burn']}s"
+                f"h_bellyflop={startLanding['h_bellyflop']:.0f}m "
+                f"h_ignite={startLanding['h_ignite']:.0f}m "
+                f"margin={startLanding['margin']:.2f}x "
+                f"t_burn={startLanding['t_burn']}s"
             )
-            if gfold['bellyflop_now'] or self.altitude() < minAltitude:
+            if startLanding['bellyflop_now']: # or self.altitude() < minAltitude:
                 break
 
         self.bellyFlop()
+        
         logging.debug('horizontal speed : ' + str(self.horizontalSpeed()) + ' vertical speed : '  + str(self.verticalSpeed()))
         self.reachSpeed(-20)
         
@@ -679,7 +706,6 @@ class FlightPlan:
             self.maintainSpeed()
             time.sleep(0.1)
         self.reachSpeed(-5)
-        
         logging.debug('horizontal speed : ' + str(self.horizontalSpeed()) + ' vertical speed : '  + str(self.verticalSpeed()) + ' prograde : ' + str(self.getProgradAngle()))
         position = {'lat':self.telemetry.streamLatitude(),'long':self.telemetry.streamLongitude()}
         logging.info('lat: ' + str(position['lat']()) + ' long: ' + str(position['long']()))
@@ -692,6 +718,7 @@ class FlightPlan:
             
         logging.info("engines shutdown")
         self.vessel.control.throttle = 0
+        
         time.sleep(3)
         self.vessel.control.rcs = False
         return
