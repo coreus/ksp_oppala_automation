@@ -1,4 +1,4 @@
-from abstract_tuning import AbstractTuning
+from .abstract_tuning import AbstractTuning
 import logging
 class HorizontalVelocityTuning(AbstractTuning):
     def __init__(self,getSpeed,targetAngle,setSAS,setControlPitch,getPitch,autoPilot):

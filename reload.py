@@ -1,4 +1,4 @@
-from connect import Connect
+from libs.connect import Connect
 
 
 client = Connect.start("reload")

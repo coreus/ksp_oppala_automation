@@ -5,10 +5,11 @@ import time
 import numpy as np
 import csv
 import krpc.services.spacecenter
-from telemetry import Telemetry
-from derivative import Derivative
-from dataset import Dataset
-from flaptuning import FlapTuningV2
+from .telemetry import Telemetry
+from .derivative import Derivative
+from .dataset import Dataset
+from .flaptuning import FlapTuningV2
+from .landing_guidance import shouldStartLanding
 
 
 #from rendezvous import Rendezvous
@@ -38,7 +39,6 @@ class FlightPlan:
         self.velocity = self.telemetry.streamVelocity(self.conn.space_center.ReferenceFrame.create_hybrid(
                                                                                             position=self.vessel.orbit.body.reference_frame,
                                                                                             rotation=self.vessel.surface_reference_frame))
-
         self.position = {'lat':self.telemetry.streamLatitude(),'long':self.telemetry.streamLongitude()}
         self.padCoordinates = {'lat':self.position['lat'](),'long':self.position['long']()}
         
@@ -115,7 +115,7 @@ class FlightPlan:
         self.vessel.control.rcs = False
         while self.verticalSpeed()>0:
             time.sleep(0.5)
-        logging.info("On éteint les moteurs!")
+        logging.info("Shutting down engines!")
         self.vessel.control.throttle = 0
 
     def launchToOrbit(self,orbitalAltitude,gravityTurnStart,gravityTurnEnd):
@@ -265,6 +265,7 @@ class FlightPlan:
         #self.vessel.auto_pilot.reference_frame = self.vessel.surface_reference_frame
         
         self.vessel.auto_pilot.target_roll = 0
+        #self.vessel.auto_pilot.target_heading = self.vessel.flight().heading
         self.vessel.control.rcs = False
         flight = self.vessel.flight()
         tuner = FlapTuningV2(self.getFrontFlapAngle,self.getBackFlapAngle,self.setFrontFlap, self.setBackFlap,self.getPitch)
@@ -286,11 +287,12 @@ class FlightPlan:
                     tuner.setFrontState(True)
                     tuner.setBackState(False)
                 
-                #self.vessel.auto_pilot.target_pitch = float(angle)
-                self.vessel.auto_pilot.target_pitch_and_heading(float(angle),self.yawToPoint(self.padCoordinates["lat"],self.padCoordinates["long"]))
+                self.vessel.auto_pilot.target_pitch = float(angle)
+                #self.vessel.auto_pilot.target_pitch_and_heading(float(angle),self.yawToPoint(self.padCoordinates["lat"],self.padCoordinates["long"]))
                 
                 tuner.setTargetPosition(float(angle) + self.getProgradAngle())
                 #aligned = False
+                padLong = -74.55773266001711
                 while self.horizontalSpeed() > float(speed) or float(angle) + self.getProgradAngle()<5:
                     if tuner.reverse == False and flight.mach < 1.2:
                         tuner.setReverse(True)
@@ -298,16 +300,18 @@ class FlightPlan:
                     #tuning is useless without atmosphere
                     if flight.atmosphere_density > 0.001:
                         tuner.tune()
+                        estimatedLandingZone = self.estimateLandingZone()
+                        logging.debug("target pitch : " + str(float(angle)) + " prograde : " + str(self.getProgradAngle()) + " target position : " + str(tuner.targetPosition))
                         if abs(tuner.targetPosition - float(angle) - self.getProgradAngle()) > 1:
                             tuner.setTargetPosition(float(angle) + self.getProgradAngle())
                     force =  math.sqrt(pow(flight.aerodynamic_force[0],2) + pow(flight.aerodynamic_force[1],2) + pow(flight.aerodynamic_force[2],2))
-                    logging.debug('horizontal speed : ' + str(self.horizontalSpeed()) + ' vertical speed : '  + str(self.verticalSpeed()) + " tangage : " + str(flight.pitch) + " atmo density : " + str(flight.atmosphere_density) + " altitude : " + str(self.altitude()) + " mach: " + str(flight.mach) + " dynamic pressure: " + str(flight.dynamic_pressure) + " aerodynamic force: " + str(force) + " aoa: " + str(flight.angle_of_attack) + " prograde: " + str(self.getProgradAngle()))
+                    logging.debug('horizontal speed : ' + str(self.horizontalSpeed()) + ' vertical speed : '  + str(self.verticalSpeed()) + " pitch: " + str(flight.pitch) + " atmo density : " + str(flight.atmosphere_density) + " altitude : " + str(self.altitude()) + " mach: " + str(flight.mach) + " dynamic pressure: " + str(flight.dynamic_pressure) + " aerodynamic force: " + str(force) + " aoa: " + str(flight.angle_of_attack) + " prograde: " + str(self.getProgradAngle()))
                     time.sleep(0.1)
 
     def landAtKSC(self):
         startAt = -129.4
         startAt = -129.9
-        
+        startAt = -130.0
         distancePerDegree = (self.vessel.orbit.body.equatorial_radius + self.altitude()) * math.pi * 2 / 360
         initialLongitude = self.telemetry.streamLongitude()()
 
@@ -361,6 +365,17 @@ class FlightPlan:
         while self.altitude() > 51000:
             time.sleep(0.5)
         
+    def estimateLandingZone(self):
+        target_radius = self.vessel.orbit.body.equatorial_radius
+        impact_true_anomaly = self.vessel.orbit.true_anomaly_at_radius(target_radius)
+
+        impact_ut = self.vessel.orbit.ut_at_true_anomaly(impact_true_anomaly)
+        impact_pos = self.vessel.orbit.position_at(impact_ut, self.vessel.orbit.body.reference_frame)
+        
+        impact_latitude = self.vessel.orbit.body.latitude_at_position(impact_pos, self.vessel.orbit.body.reference_frame)
+        impact_longitude = self.vessel.orbit.body.longitude_at_position(impact_pos, self.vessel.orbit.body.reference_frame)
+        logging.info('estimated landing zone - lat: ' + str(impact_latitude) + ' long: ' + str(impact_longitude))
+        return {'lat': impact_latitude, 'long': impact_longitude}
     
     def prelanding(self, angle, prograde):
         self.vessel.auto_pilot.engage()
@@ -370,7 +385,7 @@ class FlightPlan:
         self.setBackFlap(angle)
         
         while self.horizontalSpeed() > 150:
-            logging.debug('horizontal speed : ' + str(self.horizontalSpeed()) + 'vertical speed : '  + str(self.verticalSpeed()) + " tangage : " + str(flight.pitch))
+            logging.debug('horizontal speed : ' + str(self.horizontalSpeed()) + 'vertical speed : '  + str(self.verticalSpeed()) + " pitch: " + str(flight.pitch))
             time.sleep(0.5)
 
     def separateStage(self):
@@ -474,20 +489,32 @@ class FlightPlan:
             self.vessel.parts.robotic_hinges[2].target_angle = 30
             self.vessel.parts.robotic_hinges[3].target_angle = 120
 
+    def getAngularVelocityMagnitude(self):
+        angular_velocity = self.vessel.angular_velocity(self.vessel.surface_reference_frame)
+        return math.sqrt(angular_velocity[0]**2 + angular_velocity[1]**2 + angular_velocity[2]**2)
 
     def bellyFlop(self):
+        bellyflop_start = self.ut()
         self.vessel.control.throttle = 0.3
         self.vessel.control.rcs = True
         
         self.setFrontFlap(90)
         self.setBackFlap(20)
         self.setSAS(mode=self.vessel.control.sas_mode.retrograde)
-
-        while abs(self.flight.pitch - 90) > 3:
-            time.sleep(0.01)
-        self.setFrontFlap(20)
         
-        self.vessel.control.throttle = 1
+        #while abs(self.flight.pitch - 90) > 3 or self.getAngularVelocityMagnitude() > 0.05:
+        #    time.sleep(0.01)
+        #    logging.debug("angular velocity : " + str(self.getAngularVelocityMagnitude()) + " pitch : " + str(self.flight.pitch))
+        #    if abs(self.flight.pitch - 90) < 3:
+        #        self.setFrontFlap(20)
+        
+        while abs(self.flight.pitch - 90) > 10 or self.getAngularVelocityMagnitude() > 1:
+            time.sleep(0.01)
+            logging.debug("angular velocity : " + str(self.getAngularVelocityMagnitude()) + " pitch : " + str(abs(self.flight.pitch - 90)))
+        self.setFrontFlap(20)
+        bellyflop_duration = self.ut() - bellyflop_start
+        logging.info("bellyflop duration : " + str(bellyflop_duration) + " s")
+        self.vessel.control.throttle = 1.0
         
 
     def identifyFlaps(self) -> None:
@@ -560,6 +587,7 @@ class FlightPlan:
 
     def reachSpeed(self,targetSpeed) -> None:
         #reach target speed
+        logging.debug("reach target speed : " + str(targetSpeed))
         vSpeed = self.verticalSpeed()
         self.vessel.control.throttle = 1
 
@@ -610,7 +638,7 @@ class FlightPlan:
         if abs(self.velocity()[2])<1:
             self.vessel.control.right = 0
 
-    def landing(self, minAltitude = 200) -> None:
+    def landing(self) -> None:
         throttle = 1.0
         self.vessel.auto_pilot.engage()
         self.vessel.auto_pilot.reference_frame = self.vessel.surface_reference_frame
@@ -618,64 +646,69 @@ class FlightPlan:
         self.vessel.control.rcs = False
         self.vessel.auto_pilot.target_roll = 0
         self.vessel.auto_pilot.target_pitch = 0
-        
+        self.vessel.auto_pilot.target_heading = self.vessel.flight().heading
         tuner = FlapTuningV2(self.getFrontFlapAngle,self.getBackFlapAngle,self.setFrontFlap, self.setBackFlap,self.getPitch)
         tuner.setTargetPosition(0)
         tuner.setThreshold(1)
         tuner.setReverse(True)
-        
-        baseMass = self.vessel.mass
-        y_acceleration = self.vessel.max_thrust * throttle / baseMass
-        
+
         while True:
-            logging.debug('horizontal speed : ' + str(self.horizontalSpeed()) + ' vertical speed : '  + str(self.verticalSpeed()) + " tangage : " + str(flight.pitch) + " atmo density : " + str(flight.atmosphere_density))
+            logging.debug('horizontal speed : ' + str(self.horizontalSpeed()) + ' vertical speed : '  + str(self.verticalSpeed()) + " pitch: " + str(flight.pitch) + " atmo density : " + str(flight.atmosphere_density))
             time.sleep(0.1)
             tuner.tune()
             logging.debug('front flap : ' + str(self.getFrontFlapAngle()) + ' back flap : '  + str(self.getBackFlapAngle()))
-            altitude = self.altitude() - 2.5 * self.speed()
-            squareSpeed = 2 * altitude * (y_acceleration - self.vessel.orbit.body.surface_gravity)
-            if squareSpeed < 0:
+
+            drag_vec = flight.drag
+            drag_force = drag_vec[0]
+            drag_acc = drag_force / self.vessel.mass
+            g = self.vessel.orbit.body.surface_gravity
+            logging.debug(
+                f"BELLY drag | F_drag={drag_force:.0f} N  "
+                f"a_drag={drag_acc:.2f} m/s²  "
+                f"a_eff={max(0.0, g - drag_acc):.2f} m/s² "
+                f"v_z={self.verticalSpeed():.2f} m/s "
+                f"dyn_pressure={flight.dynamic_pressure:.2f} Pa"
+            )
+            vz=self.verticalSpeed()
+            dyn_pressure=flight.dynamic_pressure
+            startLanding = shouldStartLanding(
+                h=self.altitude(),
+                vz=vz,
+                mass=self.vessel.mass,
+                T_max=self.vessel.max_thrust,
+                g=g,
+                safety_margin=1.05,
+                bellyflop_time=7.67 + 0.06017715 * vz + 0.00043227 * dyn_pressure, #not academic and approximative. linear regression on data from landing
+                drag_acc=drag_acc,
+            )
+            logging.debug(
+                f"BELLY | alt={self.altitude():.0f}m "
+                f"h_bellyflop={startLanding['h_bellyflop']:.0f}m "
+                f"h_ignite={startLanding['h_ignite']:.0f}m "
+                f"margin={startLanding['margin']:.2f}x "
+                f"t_burn={startLanding['t_burn']}s"
+            )
+            if startLanding['bellyflop_now']: 
                 break
-            if (self.speed() > math.sqrt(squareSpeed) and altitude < 10000) or altitude < minAltitude:
-                break
-        
-        
-        logging.debug('start belly flop altitude : ' +  str(self.altitude()) +' horizontal speed : ' + str(self.horizontalSpeed()) + ' vertical speed : '  + str(self.verticalSpeed()))
-        
+
         self.bellyFlop()
-        logging.debug('horizontal speed : ' + str(self.horizontalSpeed()) + ' vertical speed : '  + str(self.verticalSpeed()))
-        self.reachSpeed(-20)
         
+        autopilot_engaged = False
         self.deployLegs()
-        
-        logging.debug('horizontal speed : ' + str(self.horizontalSpeed()) + ' vertical speed : '  + str(self.verticalSpeed()) + ' prograde : ' + str(self.getProgradAngle()))
-        
-        
-        while self.altitude() > 30:
-            self.maintainSpeed()
-            logging.debug('horizontal speed : ' + str(self.horizontalSpeed()) + ' vertical speed : '  + str(self.verticalSpeed()) + ' prograde : ' + str(self.getProgradAngle()))
-            logging.debug("altitude:" + str(self.altitude()))
-            time.sleep(0.1)
-        self.vessel.auto_pilot.engage()
-        self.vessel.auto_pilot.target_direction = (1, 0, 0)
-        
-        while self.altitude() > 20:
-            self.maintainSpeed()
-            time.sleep(0.1)
-        self.reachSpeed(-5)
-        
-        logging.debug('horizontal speed : ' + str(self.horizontalSpeed()) + ' vertical speed : '  + str(self.verticalSpeed()) + ' prograde : ' + str(self.getProgradAngle()))
-        position = {'lat':self.telemetry.streamLatitude(),'long':self.telemetry.streamLongitude()}
-        logging.info('lat: ' + str(position['lat']()) + ' long: ' + str(position['long']()))
         while self.altitude() > 7:
-            self.maintainSpeed()
-            time.sleep(0.1)
-            
+            throttle = (self.vessel.mass / self.vessel.max_thrust) * (self.vessel.orbit.body.surface_gravity + self.verticalSpeed() ** 2 / (2 * self.altitude())) * 1.2
+            self.vessel.control.throttle = throttle
+            logging.debug('throttle : ' + str(throttle))
             logging.debug('horizontal speed : ' + str(self.horizontalSpeed()) + ' vertical speed : '  + str(self.verticalSpeed()))
-            logging.debug("altitude:" + str(self.altitude()))
-            
+            if self.altitude() < 30 and not autopilot_engaged:
+                self.vessel.auto_pilot.engage()
+                self.vessel.auto_pilot.target_direction = (1, 0, 0)
+                autopilot_engaged = True
+            time.sleep(0.1)
+       
         logging.info("engines shutdown")
         self.vessel.control.throttle = 0
+        
         time.sleep(3)
         self.vessel.control.rcs = False
         return
@@ -696,7 +729,7 @@ class FlightPlan:
     def transferErgol(self, tanker, target_ship, amount):
         # Ensure both vessels are docked
         if not tanker.docking_ports[0].has_docked_part or not target_ship.docking_ports[0].has_docked_part:
-            logging.error("Both vessels must be docked to transfer ergol.")
+            logging.error("Both vessels must be docked to transfer propellant.")
             return
         self.conn.space_center.target_docking_port
         # Get the resource to transfer
@@ -715,11 +748,11 @@ class FlightPlan:
     def pinpointCurrentLandingZone(self):
         if self.vessel.orbit.periapsis_altitude < 0:
             body = self.vessel.orbit.body
-            # Recherche dichotomique du temps d'impact
+            # Binary search for impact time
             t0 = self.conn.space_center.ut
             t1 = t0 + 900
             
-            for _ in range(20):  # 20 itérations suffisent souvent
+            for _ in range(20):  # 20 iterations are usually enough
                 tm = (t0 + t1) / 2
                 pos = self.vessel.orbit.position_at(tm, body.reference_frame)
                 alt = body.altitude_at_position(pos,body.reference_frame)
@@ -732,7 +765,7 @@ class FlightPlan:
             impact_pos = self.vessel.orbit.position_at(impact_time, body.reference_frame)
             lat, lon, alt = body.latitude_at_position(impact_pos,body.reference_frame),body.longitude_at_position(impact_pos,body.reference_frame), body.altitude_at_position(impact_pos,body.reference_frame)
 
-            print(f"Impact prévu à t+{impact_time - self.conn.space_center.ut:.1f}s")
+            print(f"Predicted impact at t+{impact_time - self.conn.space_center.ut:.1f}s")
             print(f"Latitude: {lat:.4f}, Longitude: {lon:.4f}")
             return {'lat': lat, 'long': lon, 'altitude': alt, 'time': impact_time}
         return False
@@ -745,8 +778,8 @@ class FlightPlan:
     
     def alignWithPad(self, tolerance_long=0.05, tolerance_lat=0.05, max_time=120):
         """
-        Ajuste la trajectoire pour passer au-dessus du pas de tir (self.padCoordinates).
-        Corrige le heading jusqu'à ce que la longitude et la latitude soient proches du pad.
+        Adjusts the trajectory to pass over the launch pad (self.padCoordinates).
+        Corrects heading until longitude and latitude are close to the pad.
         """
         padLat = self.padCoordinates['lat']
         padLong = self.padCoordinates['long']
@@ -757,20 +790,20 @@ class FlightPlan:
             d_long = abs(currentLong - padLong)
             d_lat = abs(currentLat - padLat)
             if d_long < tolerance_long and d_lat < tolerance_lat:
-                logging.info(f"Aligné avec le pas de tir : lat={currentLat:.4f}, long={currentLong:.4f}")
+                logging.info(f"Aligned with launch pad: lat={currentLat:.4f}, long={currentLong:.4f}")
                 break
-            # Calcul du cap pour viser le pas de tir
+            # Calculate heading to target the launch pad
             yaw = self.yawToPoint(padLat, padLong)
             self.vessel.auto_pilot.target_pitch_and_heading(self.vessel.auto_pilot.target_pitch, math.degrees(yaw))
             logging.debug(f"Correction heading: {math.degrees(yaw):.2f} | lat: {currentLat:.4f} | long: {currentLong:.4f}")
             time.sleep(0.5)
             if time.time() - start_time > max_time:
-                logging.warning("Alignement interrompu (timeout)")
+                logging.warning("Alignment interrupted (timeout)")
                 break
 
     def landAtKSCSequence(self):
         """
-        Aligne la trajectoire sur le pas de tir puis lance la séquence d'atterrissage KSC.
+        Aligns the trajectory with the launch pad and starts the KSC landing sequence.
         """
         #self.alignWithPad()
         self.landAtKSC()
@@ -778,7 +811,7 @@ class FlightPlan:
 
     def getBodiesAngle(self, origin_body: krpc.services.spacecenter.CelestialBody, target_body: krpc.services.spacecenter.CelestialBody,) -> float:
         """
-        Calcule l'angle entre deux corps célestes à partir de leur position actuelle.
+        Calculates the angle between two celestial bodies based on their current positions.
         """
         ut: float = self.conn.space_center.ut
         star = self.conn.space_center.bodies["Sun"]
@@ -786,7 +819,7 @@ class FlightPlan:
         #norm1 = math.sqrt(sum(a*a for a in origin_body.orbit.position_at(ut, star.reference_frame)))
         #norm2 = math.sqrt(sum(b*b for b in target_body.orbit.position_at(ut, star.reference_frame)))
 
-        ## Calcul de l'angle
+        ## Angle calculation
         #cos_theta = dot_product / (norm1 * norm2)
 
         pos1 = origin_body.orbit.position_at(ut, star.reference_frame)
@@ -806,19 +839,19 @@ class FlightPlan:
         r1: float = origin_body.orbit.semi_major_axis
         r2: float = target_body.orbit.semi_major_axis
         a: float = (r1 + r2) / 2
-        logging.info(f"Transfert de Hohmann vers {target_body.name} depuis {origin_body.name}")
-        logging.info(f"Distance actuelle : {r1:.2f} m, Distance cible : {r2:.2f} m")
-        # Calcul de la durée de transfert
+        logging.info(f"Hohmann transfer to {target_body.name} from {origin_body.name}")
+        logging.info(f"Current distance: {r1:.2f} m, Target distance: {r2:.2f} m")
+        # Calculate transfer duration
         transfer_time: float = math.pi * math.sqrt((r1 + r2)**3 / (8 * mu))
-        logging.info(f"Durée de transfert estimée : {transfer_time / (24 * 3600):.2f} jours")
+        logging.info(f"Estimated transfer duration: {transfer_time / (24 * 3600):.2f} days")
 
-        # Vitesse angulaire
+        # Angular velocity
         n1 = 2 * math.pi / origin_body.orbit.period
         n2 = 2 * math.pi / target_body.orbit.period
         
         phase_angle: float = 180 * (1 - math.sqrt(math.pow(r1,3) / math.pow(r2,3)))
         phase_angle: float = math.pi - n2 * transfer_time
-        logging.info(f"Angle de phase optimal pour le transfert : {math.degrees(phase_angle):.2f}°")
+        logging.info(f"Optimal phase angle for transfer: {math.degrees(phase_angle):.2f}°")
         
         
 
@@ -827,19 +860,19 @@ class FlightPlan:
            
             theta_rad = self.getBodiesAngle(origin_body, target_body)
             theta_deg = math.degrees(theta_rad)
-            logging.info(f"Angle actuel entre le vaisseau et la cible : {theta_deg:.2f}°")
+            logging.info(f"Current angle between vessel and target: {theta_deg:.2f}°")
             
             
 
             wait_time: float = ((theta_rad - phase_angle)) / (n1 - n2)
-            logging.info(f"Temps jusqu'à la fenêtre de transfert : {wait_time / (3600 * 24):.2f}")
+            logging.info(f"Time until transfer window: {wait_time / (3600 * 24):.2f}")
             
-            # Calcul du temps d'attente jusqu'à la fenêtre optimale
-            # L'angle de phase optimal est calculé plus haut
+            # Calculate wait time until optimal window
+            # The optimal phase angle is calculated above
             angle_diff = (theta_rad - phase_angle) % (2 * math.pi)
             if angle_diff < 0:
                 angle_diff += 2 * math.pi
-            logging.info(f"Différence d'angle pour la fenêtre de transfert : {math.degrees(angle_diff):.2f}°")
+            logging.info(f"Angle difference for transfer window: {math.degrees(angle_diff):.2f}°")
             
 
             
@@ -847,25 +880,25 @@ class FlightPlan:
 
             logging.info(origin_body.orbit.period)
             logging.info(target_body.orbit.period)
-            logging.info(f"Vitesse angulaire du vaisseau : {n1:.12f} rad/s")
-            logging.info(f"Vitesse angulaire de la cible : {n2:.12f} rad/s")
+            logging.info(f"Vessel angular velocity: {n1:.12f} rad/s")
+            logging.info(f"Target angular velocity: {n2:.12f} rad/s")
             relative_angular_velocity = n1 - n2
-            logging.info(f"Vitesse angulaire relative : {relative_angular_velocity:.12f} rad/s")
-            # Temps d'attente jusqu'à la fenêtre
+            logging.info(f"Relative angular velocity: {relative_angular_velocity:.12f} rad/s")
+            # Wait time until the window
             #wait_time = (angle_diff * 180 / math.pi) / relative_angular_velocity
             
-            logging.info(f"Attente de {wait_time:.0f} secondes pour la fenêtre de transfert optimale")
+            logging.info(f"Waiting {wait_time:.0f} seconds for optimal transfer window")
             
-            # Avance le temps jusqu'à la fenêtre de transfert
+            # Fast-forward to the transfer window
             transfer_ut = self.conn.space_center.ut + wait_time
             #logging.info(self.conn.space_center.warp_factor)
             #self.conn.space_center.rails_warp_factor  = 7
-            logging.info(f"Avance le temps à {transfer_ut} UT pour le transfert de Hohmann")
-            self.conn.space_center.warp_to(transfer_ut - 60)  # Arrive 1 minute avant pour se préparer
+            logging.info(f"Fast-forwarding to {transfer_ut} UT for Hohmann transfer")
+            self.conn.space_center.warp_to(transfer_ut - 60)  # Arrive 1 minute early to prepare
 
     def executeHohmannTransfer(self, target_body: krpc.services.spacecenter.CelestialBody) -> None:
         """
-        Effectue un transfert de Hohmann vers le corps céleste cible (target_body).
+        Executes a Hohmann transfer to the target celestial body (target_body).
         """
         vessel: krpc.services.spacecenter.Vessel = self.vessel
         origin_body: krpc.services.spacecenter.CelestialBody = self.conn.space_center.bodies["Sun"]
@@ -873,13 +906,13 @@ class FlightPlan:
         r1: float = vessel.orbit.body.orbit.semi_major_axis
         r2: float = target_body.orbit.semi_major_axis
         a: float = (r1 + r2) / 2
-        logging.info(f"Transfert de Hohmann vers {target_body.name} depuis {origin_body.name}")
-        logging.info(f"Distance actuelle : {r1:.2f} m, Distance cible : {r2:.2f} m")
-        # Calcul de la durée de transfert
+        logging.info(f"Hohmann transfer to {target_body.name} from {origin_body.name}")
+        logging.info(f"Current distance: {r1:.2f} m, Target distance: {r2:.2f} m")
+        # Calculate transfer duration
         transfer_time: float = math.pi * math.sqrt((r1 + r2)**3 / (8 * mu))
-        logging.info(f"Durée de transfert estimée : {transfer_time / (24 * 3600):.2f} jours")
+        logging.info(f"Estimated transfer duration: {transfer_time / (24 * 3600):.2f} days")
 
-        # Vitesse angulaire
+        # Angular velocity
         n1 = 2 * math.pi / vessel.orbit.body.orbit.period
         n2 = 2 * math.pi / target_body.orbit.period
         
@@ -888,43 +921,43 @@ class FlightPlan:
         #phase_angle_target = math.pi - n2 * transfer_time
         #phase_angle_target = phase_angle_target % (2*math.pi)
 #
-        #print(f"Angle de phase cible (°): {math.degrees(phase_angle_target):.2f}")
+        #print(f"Target phase angle (°): {math.degrees(phase_angle_target):.2f}")
 
-        # Calcul du delta-v pour le transfert de Hohmann
+        # Calculate delta-v for the Hohmann transfer
         v1: float = math.sqrt(mu / r1)
         v_transfer: float = math.sqrt(mu * (2/r1 - 1/a))
         delta_v1: float = v_transfer - v1
         delta_v2: float = math.sqrt(mu / r2) - v_transfer
-        logging.info(f"Delta-v pour le transfert de Hohmann : {delta_v1:.2f} m/s")
+        logging.info(f"Delta-v for Hohmann transfer: {delta_v1:.2f} m/s")
         
         
-        # Pour une solution robuste, il faudrait calculer l'angle actuel et attendre la bonne fenêtre
-        # Calcul de l'angle de phase actuel entre les deux corps
+        # For a robust solution, the current angle should be calculated and the right window awaited
+        # Calculate the current phase angle between the two bodies
         ut: float = self.conn.space_center.ut
         
         dot_product = sum(a*b for a, b in zip(vessel.orbit.body.orbit.position_at(ut, origin_body.reference_frame), target_body.orbit.position_at(ut, origin_body.reference_frame)))
         norm1 = math.sqrt(sum(a*a for a in vessel.orbit.body.orbit.position_at(ut, origin_body.reference_frame)))
         norm2 = math.sqrt(sum(b*b for b in target_body.orbit.position_at(ut, origin_body.reference_frame)))
 
-        # Calcul de l'angle
+        # Angle calculation
         cos_theta = dot_product / (norm1 * norm2)
         theta_rad = math.acos(cos_theta)
         theta_deg = math.degrees(theta_rad)
-        logging.info(f"Angle actuel entre le vaisseau et la cible : {theta_deg:.2f}°")
+        logging.info(f"Current angle between vessel and target: {theta_deg:.2f}°")
         
         phase_angle: float = 180 * (1 - math.sqrt(math.pow(r1,3) / math.pow(r2,3)))
         phase_angle: float = math.pi - n2 * transfer_time
-        logging.info(f"Angle de phase optimal pour le transfert : {math.degrees(phase_angle):.2f}°")
+        logging.info(f"Optimal phase angle for transfer: {math.degrees(phase_angle):.2f}°")
 
         wait_time: float = ((theta_rad - phase_angle)) / (n1 - n2)
-        logging.info(f"Temps jusqu'à la fenêtre de transfert : {wait_time / (3600 * 24):.2f}")
+        logging.info(f"Time until transfer window: {wait_time / (3600 * 24):.2f}")
         
-        # Calcul du temps d'attente jusqu'à la fenêtre optimale
-        # L'angle de phase optimal est calculé plus haut
+        # Calculate wait time until optimal window
+        # The optimal phase angle is calculated above
         angle_diff = (theta_rad - phase_angle) % (2 * math.pi)
         if angle_diff < 0:
             angle_diff += 2 * math.pi
-        logging.info(f"Différence d'angle pour la fenêtre de transfert : {math.degrees(angle_diff):.2f}°")
+        logging.info(f"Angle difference for transfer window: {math.degrees(angle_diff):.2f}°")
         
 
         
@@ -932,26 +965,26 @@ class FlightPlan:
 
         logging.info(vessel.orbit.body.orbit.period)
         logging.info(target_body.orbit.period)
-        logging.info(f"Vitesse angulaire du vaisseau : {n1:.12f} rad/s")
-        logging.info(f"Vitesse angulaire de la cible : {n2:.12f} rad/s")
+        logging.info(f"Vessel angular velocity: {n1:.12f} rad/s")
+        logging.info(f"Target angular velocity: {n2:.12f} rad/s")
         relative_angular_velocity = n1 - n2
-        logging.info(f"Vitesse angulaire relative : {relative_angular_velocity:.12f} rad/s")
-        # Temps d'attente jusqu'à la fenêtre
+        logging.info(f"Relative angular velocity: {relative_angular_velocity:.12f} rad/s")
+        # Wait time until the window
         #wait_time = (angle_diff * 180 / math.pi) / relative_angular_velocity
         
-        logging.info(f"Attente de {wait_time:.0f} secondes pour la fenêtre de transfert optimale")
+        logging.info(f"Waiting {wait_time:.0f} seconds for optimal transfer window")
         
-        # Avance le temps jusqu'à la fenêtre de transfert
+        # Fast-forward to the transfer window
         transfer_ut = self.conn.space_center.ut + wait_time
         #logging.info(self.conn.space_center.warp_factor)
         #self.conn.space_center.rails_warp_factor  = 7
-        self.conn.space_center.warp_to(transfer_ut - 60)  # Arrive 1 minute avant pour se préparer
+        self.conn.space_center.warp_to(transfer_ut - 60)  # Arrive 1 minute early to prepare
         
-        # Crée un nœud de manœuvre pour le transfert
+        # Create a maneuver node for the transfer
         ut: float = self.conn.space_center.ut
         node: krpc.services.spacecenter.Node = vessel.control.add_node(ut + 60, prograde=delta_v1)
         
-        # Calcul du temps de burn
+        # Calculate burn time
         F: float = vessel.max_thrust
         Isp: float = vessel.specific_impulse * origin_body.surface_gravity
         m0: float = vessel.mass
@@ -959,23 +992,23 @@ class FlightPlan:
         flowRate: float = F / Isp
         burnTime: float = (m0 - m1) / flowRate
         
-        # Oriente le vaisseau
+        # Orient the vessel
         vessel.auto_pilot.reference_frame = node.reference_frame
         vessel.auto_pilot.target_direction = (0, 1, 0)
         vessel.auto_pilot.engage()
         vessel.auto_pilot.wait()
         
-        # Accélère le temps jusqu'au burn
+        # Warp to burn time
         burn_ut: float = ut + 60 - (burnTime/2)
         self.conn.space_center.warp_to(burn_ut)
         
-        # Effectue la poussée
+        # Execute the burn
         vessel.control.throttle = 1.0
         time.sleep(burnTime - 0.1)
         vessel.control.throttle = 0.05
         time.sleep(0.2)
         vessel.control.throttle = 0.0
         node.remove()
-        logging.info("Transfert de Hohmann effectué vers " + target_body.name)
+        logging.info("Hohmann transfer completed to " + target_body.name)
 
 

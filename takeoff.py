@@ -1,15 +1,16 @@
 import logging, time, os, sys
 import math
-from flightplan import FlightPlan
-from rendezvous import Rendezvous
-from connect import Connect
+from libs.flightplan import FlightPlan
+from libs.rendezvous import Rendezvous
+from libs.connect import Connect
+from libs.logger import setup as setup_logging
 
 plan = sys.argv[1]
 vesselName = sys.argv[2]
 target = sys.argv[3]
 conn = Connect.start('Takeoff')
 
-logging.basicConfig(level=logging.DEBUG)
+setup_logging()
 
 
 timeToOrbit = 227.8
@@ -44,7 +45,7 @@ if not alreadyFlying:
     time.sleep(2)
     if plan == "test":
         logging.info("test launch")
-        flight.testLaunch(6000)
+        flight.testLaunch(int(target))
     if plan == "orbit":
         logging.info("launch to orbit")
         flight.launchToOrbit(targetAltitude,turnStartAltitude,turnEndAltitude)
@@ -107,7 +108,7 @@ if not alreadyFlying:
             flight.setFrontFlap(30)
             flight.setBackFlap(90)
             logging.info("landing")
-            flight.landing(700)
+            flight.landing()
             flight.touchDown()
             flight.vessel.recover()
             if refill:
@@ -144,7 +145,7 @@ if plan == "testorbit":
     flight.reentry("reentry_plan.csv")
     flight.setFrontFlap(30)
     flight.setBackFlap(90)
-    flight.landing(700)
+    flight.landing()
     flight.touchDown()
     exit()
 if plan == "rendezvous":
@@ -172,11 +173,13 @@ if plan == "rendezvous":
 if plan == "test":
     flight.prepareLanding()
 if plan == "reentry":
-    flight.landAtKSCSequence()
-    flight.desorbit(4)
+    #flight.landAtKSCSequence()
+    #flight.desorbit(4)
     flight.reentry("reentry_plan.csv")
     flight.setFrontFlap(30)
-    flight.setBackFlap(90)
+    flight.setBackFlap(70)
+if plan == "landing":
+    flight.prepareLanding()
 logging.info("landing")
-flight.landing(700)
+flight.landing()
 flight.touchDown()

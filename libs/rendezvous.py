@@ -1,8 +1,8 @@
 import time
 import logging
-from helper import Helper
-from derivative import Derivative
-from flightplan import FlightPlan
+from .helper import Helper
+from .derivative import Derivative
+from .flightplan import FlightPlan
 
 
 class Rendezvous:
