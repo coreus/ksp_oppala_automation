@@ -1,6 +1,6 @@
 # KSP Oppala — Autonomous Rocket Automation Framework
 
-An autonomous rocket flight controller for **Kerbal Space Program**, powered by [kRPC](https://krpc.github.io/krpc/python.html). The project combines classical control theory, orbital mechanics, and machine learning to fully automate rocket missions — from launch to powered landing.
+An autonomous SpaceX Starship like flight controller for **Kerbal Space Program**, powered by [kRPC](https://krpc.github.io/krpc/python.html). The project combines classical control theory, orbital mechanics, and machine learning to fully automate rocket missions — from launch to powered landing.
 
 ---
 
@@ -8,7 +8,9 @@ An autonomous rocket flight controller for **Kerbal Space Program**, powered by 
 
 ### Test Flight — Takeoff & Landing (no orbit)
 
-[![KSP Takeoff & Landing Test](https://img.youtube.com/vi/4nODeOr5-kY/maxresdefault.jpg)](https://www.youtube.com/watch?v=4nODeOr5-kY)
+[![KSP Takeoff & Landing Test](https://img.youtube.com/vi/KK4u8fWZ6EQ/maxresdefault.jpg)](https://www.youtube.com/watch?v=4nODeOr5-kY)
+
+https://www.youtube.com/watch?v=4nODeOr5-kY
 
 ---
 
@@ -16,6 +18,8 @@ An autonomous rocket flight controller for **Kerbal Space Program**, powered by 
 
 
 [![KSP Full Mission](https://img.youtube.com/vi/QMxKuYUfXSc/maxresdefault.jpg)](https://www.youtube.com/watch?v=QMxKuYUfXSc)
+
+https://www.youtube.com/watch?v=QMxKuYUfXSc
 
 ---
 
@@ -60,7 +64,7 @@ The `rendezvous` mission plan executes the following sequence autonomously, repe
 
 ### Landing System
 
-**Bang-coast-bang guidance** (`powered_descent.py`) — physics-based, computes ignition altitude from thrust, mass, and vertical velocity with a configurable safety margin. Bellyflop duration calculation based on basic linear regression
+**Landing guidance** (`landing_guidance.py`) — physics-based, computes ignition altitude from thrust, mass, and vertical velocity with a configurable safety margin. Bellyflop duration calculation based on basic linear regression
 
 ### Reentry — Adaptive Flap Control
 
@@ -71,7 +75,6 @@ During atmospheric reentry, flap angles are tuned in a closed-loop fashion:
 
 ### Control Systems
 
-- **PID controller** (`pidcontroller.py`) — standard PID with integral anti-windup and derivative filtering
 - **AbstractTuning** (`abstract_tuning.py`) — base class for adaptive control, uses polynomial prediction to anticipate overshoot and auto-adjust output
 - **FlapTuning** (`flaptuning.py`) — closed-loop wing angle optimization during reentry
 
@@ -87,20 +90,14 @@ During atmospheric reentry, flap angles are tuned in a closed-loop fashion:
 
 ```
 ├── takeoff.py                   # Main mission controller
-├── train.py / train.v2.py       # Neural network training scripts
 ├── reload.py                    # Quick KSP quickload utility
 ├── config.ini                   # Connection and mission parameters
 ├── reentry_plan.csv             # Reentry flap/angle schedule
 ├── libs/
 │   ├── flightplan.py            # Core flight controller (launch, reentry, landing)
-│   ├── powered_descent.py       # Bang-coast-bang landing guidance
-│   ├── kinematic_landing.py     # Kinematic landing guidance
-│   ├── kinematic_landing_live.py# Live kinematic landing guidance
-│   ├── neural_landing.py        # TensorFlow neural autopilot
+│   ├── landing_guidance.py      # Landing guidance
 │   ├── rendezvous.py            # Rendezvous, docking, and fuel transfer
-│   ├── pidcontroller.py         # PID controller
 │   ├── flaptuning.py            # Adaptive flap angle tuning
-│   ├── horizontal_velocity_tuning.py
 │   ├── abstract_tuning.py       # Base class for adaptive control
 │   ├── telemetry.py             # kRPC stream helpers
 │   ├── dataset.py               # CSV flight data logger
@@ -119,4 +116,10 @@ During atmospheric reentry, flap angles are tuned in a closed-loop fashion:
 pip install -r requirements.txt
 ```
 
-Requires a running instance of **Kerbal Space Program** with the [kRPC mod](https://krpc.github.io/krpc/) installed and the server started at `172.20.16.1:50000`.
+Requires a running instance of **Kerbal Space Program** with the [kRPC mod](https://krpc.github.io/krpc/) installed and the server started.
+
+---
+
+## TODO
+
+- [ ] **Pinpoint landing** — guide the rocket to land on a specific target coordinates, combining GPS-based lateral corrections with the existing descent guidance
